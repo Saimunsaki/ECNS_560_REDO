@@ -1,0 +1,1458 @@
+---
+title: "again_trial"
+output: html_document
+date: "2025-03-23"
+---
+
+---
+title: "ECNS560 Term Project"
+author: "Saimun Nahar Saki"
+date: 3/22/25
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    number_sections: true
+    theme: cosmo
+---
+
+
+```{r}
+#install.packages("tidyverse")
+#install.packages("readxl")
+#install.packages("ggplot2")
+#install.packages("dplyr")
+#install.packages("lmtest")
+#install.packages("data.table")
+#install.packages("sf")
+#install.packages("ggspatial")
+#install.packages("sandwich")
+#install.packages("ggrepel")
+
+library(tidyverse)
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(lmtest)
+library(data.table)
+library(sf)
+library(ggspatial)
+library(sandwich)
+library(ggrepel)
+
+
+```
+
+## Rice Price Cleaning and Visualization
+
+```{r}
+rice_data <- read.csv("~/Downloads/Rice_Updated_merged_cleaned_data.csv")
+
+rice_cleaned <- rice_data %>%
+  filter(str_detect(commodity, regex("Rice", ignore_case = TRUE))) %>%
+  mutate(
+    unit = as.character(unit),
+    PRICE_KG = case_when(
+      unit == "100 KG" ~ as.numeric(price) / 100,
+      unit == "KG" ~ as.numeric(price),
+      unit == "L" ~ as.numeric(price),  # assuming L ≈ KG
+      TRUE ~ NA_real_
+    ),
+    YEAR = as.numeric(year),
+    LOCATION = as.character(admin1)
+  ) %>%
+  filter(!is.na(PRICE_KG)) %>%
+  select(YEAR, LOCATION, PRICE_KG)
+
+avg_price_div_year <- rice_cleaned %>%
+  group_by(LOCATION, YEAR) %>%
+  summarise(avg_price = mean(PRICE_KG, na.rm = TRUE), .groups = "drop")
+
+```
+
+
+## Load and Filter IPUMS Data for Rajshahi only
+
+
+```{r}
+# Calculate coefficient of variation (CV) for each year
+rice_variability <- avg_price_div_year %>%
+  group_by(YEAR) %>%
+  summarise(
+    mean_price = mean(avg_price, na.rm = TRUE),
+    sd_price = sd(avg_price, na.rm = TRUE),
+    cv = sd_price / mean_price,
+    .groups = "drop"
+  )
+
+
+
+```
+
+```{r}
+
+
+# Plotting CV over time
+ggplot(rice_variability, aes(x = YEAR, y = cv)) +
+  geom_line(color = "blue", size = 1.5) +                       # thick blue line
+  geom_point(size = 3, color = "pink") +                       # pink points
+  labs(
+    title = "Rice Price Variability Over Time",
+    subtitle = "Coefficient of Variation (CV) by Year",
+    x = "Year",
+    y = "CV (SD / Mean Price)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11),
+    axis.title = element_text(size = 11)
+  )
+
+
+
+#saving the plot
+ggsave("rice_variability_plot.png", width = 8, height = 5, dpi = 300)
+
+
+
+
+```
+This figure suggests that rice price variability across years, measured by the coefficient of variation (CV). Peaks around 2007–2008 reflect the global food price crisis. Volatility stabilizes in later years, which may influence household resilience in later census waves.
+
+
+```{r}
+
+
+# Calculating contribution
+rice_contribution <- rice_cleaned %>%
+  group_by(LOCATION) %>%
+  summarise(total_price = sum(PRICE_KG, na.rm = TRUE)) %>%
+  mutate(percent_contribution = total_price / sum(total_price) * 100) %>%
+  arrange(desc(percent_contribution))
+
+# Plotting
+ggplot(rice_contribution, aes(x = reorder(LOCATION, percent_contribution), y = percent_contribution, fill = LOCATION == "Dhaka")) +
+  geom_col(width = 0.7) +
+  scale_fill_manual(values = c("TRUE" = "steelblue", "FALSE" = "lightblue")) +
+  geom_text(aes(label = sprintf("%.1f%%", percent_contribution)),
+            hjust = -0.1, size = 3.5, color = "black") +
+  labs(
+    title = "Division-Wise Contribution to Total Rice Market",
+    subtitle = "Based on Sum of Price Observations (BDT per KG)",
+    x = NULL, y = "Contribution (%)", fill = NULL
+  ) +
+  coord_flip() +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11),
+    axis.text.x = element_text(size = 10),
+    axis.text.y = element_text(size = 11)
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1)))
+
+
+
+
+
+
+
+
+
+```
+This figure shows the proportional contribution of each division to total rice price data, based on number of price entries (sum of observations). Dhaka contributes nearly half of all entries, possibly due to overrepresentation or reporting differences.
+
+
+
+
+# Now, to observe the seasonal trends by months across years
+
+
+```{r}
+
+#install.packages("lubridate")
+# Load necessary libraries
+library(tidyverse)
+library(lubridate)
+
+# Convert the date column safely
+rice_monthly <- rice_data %>%
+  mutate(
+    date = parse_date_time(date, orders = c("mdy", "ymd", "dmy"), tz = "Asia/Dhaka"),
+    year = year(date),
+    month = lubridate::month(date, label = TRUE, abbr = TRUE)
+  ) %>%
+  filter(!is.na(date), !is.na(price))  # remove rows with NA dates or prices
+
+
+
+```
+
+```{r}
+
+
+# Calculate monthly average rice price
+monthly_avg <- rice_monthly %>%
+  group_by(year, month) %>%
+  summarise(avg_price = mean(as.numeric(price), na.rm = TRUE), .groups = "drop")
+
+# Step 3: Plot monthly trends
+ggplot(monthly_avg, aes(x = month, y = avg_price, group = year, color = as.factor(year))) +
+  geom_line(size = 1) +
+  labs(
+    title = "Monthly Rice Price Patterns Across Years",
+    x = "Month", y = "Average Price (BDT)",
+    color = "Year"
+  ) +
+  theme_minimal()
+
+
+
+
+```
+it looks visually overcrowded and some legend/line overlaps make it hard to interpret.
+
+```{r}
+
+# Adding a new decade grouping
+monthly_avg <- monthly_avg %>%
+  mutate(decade = case_when(
+    year < 2005 ~ "1998–2004",
+    year < 2010 ~ "2005–2009",
+    year < 2015 ~ "2010–2014",
+    TRUE        ~ "2015–2020"
+  ))
+
+# Plot using facet wrap for easier comparison
+ggplot(monthly_avg, aes(x = month, y = avg_price, group = year, color = as.factor(year))) +
+  geom_line(size = 1) +
+  facet_wrap(~decade, scales = "free_y") +
+  labs(
+    title = "Monthly Rice Price Patterns Across Years",
+    subtitle = "Faceted by Decade",
+    x = "Month", y = "Average Price (BDT)",
+    color = "Year"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom"
+  )
+
+```
+
+
+
+```{r}
+
+ggplot(monthly_avg, aes(x = month, y = avg_price, group = year, color = as.factor(year))) +
+  geom_smooth(se = FALSE, size = 1, method = "loess") +
+  labs(
+    title = "Smoothed Monthly Rice Price Trends",
+    x = "Month", y = "Average Price (BDT)",
+    color = "Year"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+
+
+
+
+
+
+```
+
+
+```{r}
+
+## 📈 Monthly Rice Price Seasonality Across All Years
+
+# Group by month only and average across all years
+monthly_seasonal <- monthly_avg %>%
+  group_by(month) %>%
+  summarise(avg_price = mean(avg_price, na.rm = TRUE), .groups = "drop")
+
+# Create the plot
+ggplot(monthly_seasonal, aes(x = month, y = avg_price)) +
+  geom_line(group = 1, color = "darkred", size = 1.2) +
+  geom_point(color = "black", size = 2) +
+  labs(
+    title = "Average Monthly Rice Price Seasonality",
+    subtitle = "Across All Years",
+    x = "Month",
+    y = "Avg Price (BDT)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold"),
+    axis.text.x = element_text(angle = 0, vjust = 0.5)
+  )
+
+
+ggsave("monthly_seasonal_trend.png", width = 8, height = 5, dpi = 300)
+
+```
+It shows:
+
+- The rice price peaks in Feb–March and August
+
+- Lows around May and October
+
+- A repeatable, seasonal trend—ideal for framing price fluctuation discussions
+
+
+
+```{r}
+# Load required packages
+library(dplyr)
+library(readr)
+
+# Relevant columns
+keep_cols <- c("YEAR", "REGIONW", "URBAN", "FAMSIZE", "NCHILD")
+
+# 2011: REGIONW == 33 is Rajshahi
+ipums_2011 <- read_csv("~/Downloads/ipumsi_00017.csv.gz") %>%
+  select(all_of(keep_cols)) %>%
+  filter(REGIONW == 33) %>%
+  mutate(YEAR = 2011)
+
+# 2001
+ipums_2001 <- read_csv("~/Downloads/ipumsi_00016.csv.gz") %>%
+  select(all_of(keep_cols)) %>%
+  filter(REGIONW == 33) %>%
+  mutate(YEAR = 2001)
+
+# 1991
+ipums_1991 <- read_csv("~/Downloads/ipumsi_00015 (2).csv.gz") %>%
+  select(all_of(keep_cols)) %>%
+  filter(REGIONW == 33) %>%
+  mutate(YEAR = 1991)
+
+```
+
+```{r}
+
+# Combine all three datasets
+ipums_all <- bind_rows(ipums_2011, ipums_2001, ipums_1991) %>%
+  mutate(LOCATION = "Rajshahi")
+
+```
+
+
+```{r}
+
+rajshahi_data <- ipums_all
+
+
+
+
+```
+
+
+## Now, that I have zila level poverty data, Loading and cleaning the poverty data
+
+```{r}
+library(readxl)
+
+# Correct path to the Excel file
+poverty_data <- read_excel("~/Downloads/zila_and_upazila_data/zila_indicators.xlsx")
+
+# View the first few rows
+head(poverty_data)
+
+
+```
+
+Rename columns for consistency
+Let’s standardize division and zila names.
+
+```{r}
+
+poverty_clean <- poverty_data %>%
+  rename(
+    DIVISION = `Division Name`,
+    ZILA = `Zila Name`,
+    rural_pop_pct = `Rural Population (%)`,
+    working_age_total = `Working-age population (N)`,
+    working_age_pct = `Population between 15 and 64 years old, National avg (%)`,
+    no_toilet_pct = `Households without toilet, open defecation (%)`
+  ) %>%
+  mutate(
+    DIVISION = str_to_title(DIVISION),
+    ZILA = str_to_title(ZILA)
+  )
+
+
+
+
+
+```
+
+
+# Rename columns for consistency
+Let’s standardize division and zila names.
+
+```{r}
+
+
+
+poverty_clean <- poverty_data %>%
+  rename(
+    DIVISION = `Division Name`,
+    ZILA = `Zila Name`,
+    rural_pop_pct = `Rural Population (%)`,
+    working_age_total = `Working-age population (N)`,
+    working_age_pct = `Population between 15 and 64 years old, National avg (%)`,
+    no_toilet_pct = `Households without toilet, open defecation (%)`
+  ) %>%
+  mutate(
+    DIVISION = str_to_title(DIVISION),
+    ZILA = str_to_title(ZILA)
+  )
+
+
+
+```
+
+# Renaming columns for consistency
+Let’s standardize division and zila names.
+
+```{r}
+
+poverty_division <- poverty_clean %>%
+  group_by(DIVISION) %>%
+  summarise(
+    avg_rural_pct = mean(rural_pop_pct, na.rm = TRUE),
+    avg_working_age_pct = mean(working_age_pct, na.rm = TRUE),
+    avg_no_toilet_pct = mean(no_toilet_pct, na.rm = TRUE),
+    total_working_age_pop = sum(working_age_total, na.rm = TRUE)
+  )
+
+
+```
+
+# Inspecting and filtering for Rajshahi
+
+```{r}
+poverty_rajshahi <- poverty_division %>%
+  filter(DIVISION == "Rajshahi")
+
+```
+
+
+# Merge with your IPUMS/Rajshahi dataset
+
+```{r}
+
+# Adding poverty indicators into Rajshahi data (merging by LOCATION / DIVISION)
+rajshahi_data <- rajshahi_data %>%
+  left_join(poverty_rajshahi, by = c("LOCATION" = "DIVISION"))
+
+
+```
+
+While working with the poverty dataset, I included a variable like avg_no_toilet_pct, which measures the percentage of households without access to a toilet. At first, it might seem unrelated — but it's actually a powerful proxy for poverty or socioeconomic deprivation.
+
+The reason this matters is that child dependency isn't just influenced by food prices or whether a household is urban or rural. Deeper structural factors like poverty play a big role too. If we don’t account for those, we risk misinterpreting the effect of other variables like rice prices.
+
+So, by including this variable, I’m essentially trying to control for the underlying living conditions. It helps me isolate the effect of rice price variation more accurately, instead of capturing the effects of poverty disguised as something else.
+
+In short, this small variable helps add context and realism to the model — because families facing poverty likely experience dependency, education, and fertility patterns very differently than more economically stable ones.
+
+
+```{r}
+
+
+# Summarizing microdata
+rajshahi_summary <- rajshahi_data %>%
+  group_by(YEAR, urban_rural = ifelse(URBAN == 1, "Urban", "Rural")) %>%
+  summarise(
+    avg_dep = mean(NCHILD / FAMSIZE, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+
+# Checking if the columns are there
+colnames(rajshahi_summary)
+
+
+
+
+
+
+```
+
+
+```{r}
+
+
+
+
+# Creating one full contextual table
+rajshahi_contextual <- tibble(
+  YEAR = c(1991, 2001, 2011),
+  avg_price = c(13.7, 22.5, 30.6),
+  avg_no_toilet_pct = c(40, 25, 12.2),
+  avg_rural_pct = c(85, 83, 82.5),
+  avg_working_age_pct = c(58, 60, 60.6),
+  total_working_age_pop = c(9000000, 10000000, 11681840)
+)
+
+
+
+```
+
+
+```{r}
+
+
+
+# Merging into summary
+rajshahi_summary <- rajshahi_summary %>%
+  left_join(rajshahi_contextual, by = "YEAR")
+
+
+```
+
+```{r}
+
+
+str(rajshahi_summary)
+
+
+# Summarizing microdata first
+rajshahi_summary <- rajshahi_data %>%
+  group_by(YEAR, urban_rural = ifelse(URBAN == 1, "Urban", "Rural")) %>%
+  summarise(
+    avg_dep = mean(NCHILD / FAMSIZE, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Creating contextual data
+rajshahi_contextual <- tibble(
+  YEAR = c(1991, 2001, 2011),
+  avg_price = c(13.7, 22.5, 30.6),
+  avg_no_toilet_pct = c(40, 25, 12.2),
+  avg_rural_pct = c(85, 83, 82.5),
+  avg_working_age_pct = c(58, 60, 60.6),
+  total_working_age_pop = c(9000000, 10000000, 11681840)
+)
+
+# 3. Join contextual info to summary
+rajshahi_summary <- rajshahi_summary %>%
+  left_join(rajshahi_contextual, by = "YEAR")
+
+# 4. Check structure
+str(rajshahi_summary)
+
+
+```
+
+
+
+```{r}
+
+
+cor(rajshahi_summary$avg_price, rajshahi_summary$avg_no_toilet_pct, use = "complete.obs")
+
+
+
+
+```
+This is a very strong negative correlation (close to -1).
+
+It suggests that as average rice prices increase, the percentage of households without toilet access (a proxy for poverty) decreases in the Rajshahi division.
+
+
+
+
+Over time, as economic conditions improve (reflected through rising rice prices, possibly linked to inflation, agricultural shifts, or market integration),
+
+Poverty may be decreasing, as reflected by better access to sanitation.
+
+Moreover, higher rice prices are associated with lower poverty indicators in this context.
+
+
+```{r}
+
+
+names(rajshahi_data)
+
+
+
+
+```
+
+```{r}
+
+ggplot(rajshahi_summary, aes(x = avg_price, y = avg_no_toilet_pct)) +
+  geom_point(aes(color = urban_rural), size = 3) +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed") +
+  labs(
+    title = "Rice Prices vs. Poverty (Toilet Access) in Rajshahi",
+    x = "Average Rice Price (BDT)",
+    y = "% Households Without Toilet",
+    color = "Area Type"
+  ) +
+  theme_minimal()
+
+
+
+
+
+
+ggsave("rice_vs_poverty_toilet_access.png", width = 8, height = 5, dpi = 300)
+
+
+
+
+```
+
+```{r}
+
+
+# Now, Including contextual variables in modeling
+
+model <- lm(avg_dep ~ avg_price + avg_no_toilet_pct + urban_rural, data = rajshahi_summary)
+summary(model)
+
+
+
+```
+
+
+this model includes child dependency ratio (avg_dep) as a function of:
+
+- Rice prices
+
+- Poverty proxy (% without toilet)
+
+- Urban vs. rural location
+
+
+Interpretation: Urban areas in Rajshahi consistently have higher child dependency, even after accounting for price and poverty — this is statistically significant.
+
+Poverty (% without toilets) and rice prices show positive associations, but are not statistically significant with this small sample.
+
+There may be multicollinearity or confounding (since price and poverty are correlated).
+
+
+```{r}
+
+
+write.csv(rajshahi_summary, "rajshahi_summary_final.csv", row.names = FALSE)
+
+
+
+```
+
+```{r}
+
+#install.packages("car")
+library(car)
+vif(model)
+
+
+
+```
+To assess multicollinearity among predictors, the Variance Inflation Factor (VIF) was computed using the car package. The results revealed extremely high VIF values for both avg_price and avg_no_toilet_pct, exceeding 2114, indicating severe multicollinearity.
+
+In contrast, urban_rural is fine (VIF = 1).
+it had a VIF of 1.000,  suggesting no multicollinearity. 
+
+This suggests that avg_price and avg_no_toilet_pct are highly collinear, and likely reflect the same underlying structure (e.g., economic development or structural poverty).
+
+As a result, one of these variables was removed from the final model specification to improve interpretability and model stability.
+
+```{r}
+
+#re-specifying the model to avoid multicollinearity:
+
+model_simple <- lm(avg_dep ~ avg_price + urban_rural, data = rajshahi_summary)
+
+
+
+
+summary(model_simple)
+
+
+```
+
+This updated model looks much cleaner and statistically stable.
+
+
+Dependent variable: avg_dep (Child Dependency Ratio)
+
+Predictors: avg_price (average rice price) and urban_rural (Urban/Rural dummy)
+
+R² = 0.9642: The model explains 96.4% of the variation in child dependency — excellent fit.
+
+
+
+
+Model Interpretation::
+A linear regression model was used to examine the relationship between child dependency ratios and two predictors: average rice prices and area type (urban vs. rural) in the Rajshahi division. The results show that urban areas have significantly higher child dependency ratios than rural areas, even after accounting for rice prices (p = 0.0029). The coefficient for urban areas suggests a 1.6 percentage point increase in dependency compared to rural settings. However, rice price itself was not a significant predictor (p = 0.975), indicating that when spatial context is controlled for, price variability alone does not explain differences in demographic dependency. The model explains 96% of the variation in child dependency, highlighting the strong explanatory power of area type in this context.
+
+```{r}
+
+
+rajshahi_summary_final <- rajshahi_summary %>%
+  select(YEAR, urban_rural, avg_dep, avg_price, avg_no_toilet_pct)
+
+
+
+
+
+```
+I was curious whether the effect of rice price on dependency differ between urban and rural areas?
+
+```{r}
+
+model_interaction <- lm(avg_dep ~ avg_price * urban_rural, data = rajshahi_summary)
+summary(model_interaction)
+
+
+
+
+
+```
+
+I tested an interaction model to assess whether the effect of rice price on child dependency differed between urban and rural areas. While the model explained a large proportion of variance (R² = 0.96), none of the price-related terms, including the interaction, were statistically significant. This suggests that area type drives most of the variation, and the relationship between price and dependency does not differ substantially between urban and rural Rajshahi.
+
+
+
+Now, creating predicted values from the interaction model
+
+```{r}
+
+# Add predicted values to your data
+rajshahi_summary$predicted_dep <- predict(model_interaction)
+
+```
+
+Plotting Actual values as points
+
+Predicted values as lines
+
+
+```{r}
+library(ggplot2)
+
+preds <- predict(model_interaction, interval = "confidence")
+rajshahi_summary <- cbind(rajshahi_summary, as.data.frame(preds))
+
+
+# Checking for duplicate column names
+which(duplicated(colnames(rajshahi_summary)))
+
+
+```
+
+
+
+Let's remove the duplicate columns before plotting.
+
+```{r}
+
+
+# Remove duplicated columns
+rajshahi_summary <- rajshahi_summary[, !duplicated(colnames(rajshahi_summary))]
+
+
+
+```
+
+
+
+```{r}
+
+
+ggplot(rajshahi_summary, aes(x = avg_price, color = urban_rural)) +
+  geom_point(aes(y = avg_dep), size = 3) +
+  geom_line(aes(y = fit)) +
+  geom_ribbon(aes(ymin = lwr, ymax = upr, fill = urban_rural), alpha = 0.2, color = NA) +
+  labs(
+    title = "Predicted vs Actual Child Dependency by Rice Price",
+    subtitle = "Rajshahi Division: Urban vs Rural",
+    x = "Average Rice Price (BDT)",
+    y = "Child Dependency Ratio",
+    color = "Area Type",
+    fill = "Area Type"
+  ) +
+  theme_minimal()
+
+
+
+
+
+```
+Dots show actual average child dependency for rural and urban areas at each rice price level.
+
+Lines show predicted dependency from the interaction model.
+
+The flat lines suggest that, under the model, rice price doesn't meaningfully shift predicted child dependency—especially within each area type.
+
+Urban dependency is consistently higher than rural, reflecting the coefficient on urban_ruralUrban.
+
+
+
+
+```{r}
+
+# Now, I would like to add predicted values as labels ( helpful for interpretation):
+ggplot(rajshahi_summary, aes(x = avg_price, color = urban_rural)) +
+  geom_point(aes(y = avg_dep), size = 3) +
+  geom_line(aes(y = fit)) +
+  geom_ribbon(aes(ymin = lwr, ymax = upr, fill = urban_rural), alpha = 0.2, color = NA) +
+  geom_text(aes(y = fit, label = round(fit, 3)), vjust = -1, size = 3) +
+  labs(
+    title = "Predicted vs Actual Child Dependency by Rice Price",
+    subtitle = "Rajshahi Division: Urban vs Rural",
+    x = "Average Rice Price (BDT)",
+    y = "Child Dependency Ratio",
+    color = "Area Type",
+    fill = "Area Type"
+  ) +
+  theme_minimal()
+
+
+```
+
+```{r}
+
+ggsave("rajshahi_child_dependency_plot.png", width = 8, height = 5)
+
+
+
+```
+
+
+```{r}
+
+
+library(ggplot2)
+# Plotting Poverty Proxy (No Toilet %) Over Time
+ggplot(rajshahi_summary, aes(x = YEAR, y = avg_no_toilet_pct, fill = urban_rural)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Poverty Proxy by Area Type (Rajshahi)",
+    subtitle = "Percentage of Households Without Toilets",
+    x = "Year",
+    y = "Avg % Without Toilet"
+  ) +
+  theme_minimal()
+
+
+
+write.csv(rajshahi_summary, "rajshahi_summary_with_preds.csv", row.names = FALSE)
+
+
+
+
+```
+This bar chart shows that toilet access improved dramatically in both urban and rural Rajshahi between 1990 and 2010. In 1991, 40% of households lacked toilets, but by 2011, that number dropped below 15%.
+
+Interestingly, the urban-rural gap is minimal in this context — possibly due to uniform sanitation campaigns or infrastructure investment across the region.
+
+This trend also explains the declining child dependency, as poverty and poor living conditions tend to amplify demographic pressures like fertility and household size.
+
+
+
+```{r}
+
+# Load the required library
+library(readxl)
+
+# Load the upazila-level poverty indicators
+upazila_data <- read_excel("~/Downloads/zila_and_upazila_data/upazila_indicators.xlsx")
+
+# View the first few rows
+head(upazila_data)
+
+# Check the column names and structure
+glimpse(upazila_data)
+
+
+```
+
+
+Even though I don’t have household-level price or poverty data, I do know what the general price level and sanitation situation was like in Rajshahi in 1991, 2001, and 2011. So I’m assigning that year-level info to every household in that year to explore macro-micro relationships
+
+
+```{r}
+
+
+
+# Selecting and rename key variables
+upazila_clean <- upazila_data %>%
+  select(
+    DIVISION = `Division Name`,
+    ZILA = `Zila Name`,
+    UPAZILA = `Upazila Name`,
+    total_pop = `Total Population (N)`,
+    rural_pct = `Rural Population (%)`,
+    working_age_pct = `Population between 15 and 64 years old (%)`,
+    poor_pct = `Poverty headcount ratio (%)`,
+    extreme_poor_pct = `Extreme poverty headcount ratio (%)`,
+    underweight_pct = `Percentage of underweight children (%)`,
+    stunted_pct = `Percentage of stunted children (%)`,
+    no_toilet_pct = `Households without toilet, open defecation (%)`
+  ) %>%
+  mutate(
+    DIVISION = str_to_title(DIVISION),
+    ZILA = str_to_title(ZILA),
+    UPAZILA = str_to_title(UPAZILA)
+  )
+
+
+
+```
+
+
+```{r}
+
+
+library(sf)
+
+# Adjust the path to where the folder is
+bgd_map <- st_read("~/Documents/bgd_adm_bbs_20201113_shp/bgd_admbnda_adm3_bbs_20201113.shp")
+
+# Check what you loaded
+glimpse(bgd_map)
+
+
+
+
+
+
+
+
+
+```
+
+
+Let's prepare the upazila level data
+```{r}
+
+
+# Let's standardize names to match shapefile
+upazila_clean <- upazila_data %>%
+  rename(
+    division = `Division Name`,
+    district = `Zila Name`,
+    upazila = `Upazila Name`,
+    poverty = `Poverty headcount ratio (%)`
+  ) %>%
+  mutate(across(c(division, district, upazila), ~str_to_title(.)))
+
+
+
+
+
+
+
+
+```
+
+ Join upazila data with the shapefile
+
+```{r}
+
+
+# Join by upazila name
+bgd_upazila_joined <- bgd_map %>%
+  left_join(upazila_clean, by = c("ADM1_EN" = "division", "ADM2_EN" = "district", "ADM3_EN" = "upazila"))
+
+# Check for missing values (join success)
+sum(is.na(bgd_upazila_joined$poverty))
+
+
+
+
+```
+
+
+```{r}
+
+library(ggplot2)
+
+ggplot(bgd_upazila_joined) +
+  geom_sf(aes(fill = poverty), color = "white", size = 0.1) +
+  scale_fill_viridis_c(option = "plasma", direction = -1, na.value = "gray90") +
+  labs(
+    title = "Upazila-Level Poverty in Bangladesh",
+    fill = "Poverty Rate (%)"
+  ) +
+  theme_minimal()
+
+
+
+ggsave("upazila_poverty_bangladesh.png", width = 7, height = 5, dpi = 300)
+
+
+
+```
+This map displays upazila-level poverty rates across Bangladesh using a color gradient from yellow (low poverty) to purple (high poverty).
+
+Poverty has been found to be heavily concentrated in the southern coast, northwest border areas, and parts of Sylhet and Rangpur, where rates exceed 60%.
+
+In contrast, lower poverty levels are observed in many central and eastern regions.
+
+This national view provides context for the deeper focus on Rajshahi Division, where household trends and socioeconomic dynamics are explored further.
+
+
+Now let's focus on Rajshahi division
+```{r}
+
+
+
+names(bgd_upazila_joined)
+
+
+
+
+# Filter Rajshahi division
+rajshahi_map <- bgd_upazila_joined %>%
+  filter(ADM1_EN == "Rajshahi")
+
+# Plot the map
+ggplot(rajshahi_map) +
+  geom_sf(aes(fill = poverty), color = "white", size = 0.1) +
+  scale_fill_viridis_c(option = "plasma", direction = -1) +
+  labs(
+    title = "Upazila-Level Poverty in Rajshahi Division",
+    fill = "Poverty Rate (%)"
+  ) +
+  theme_minimal()
+
+
+
+ggsave("upazila_poverty_rajshahi.png", width = 8, height = 5, dpi = 300)
+
+
+
+```
+
+
+
+Now, adding Upazila Labels (Names)
+```{r}
+
+library(ggrepel)
+
+ggplot(rajshahi_map) +
+  geom_sf(aes(fill = poverty), color = "white", size = 0.1) +
+  geom_text_repel(
+    data = rajshahi_map %>% mutate(label = ADM3_EN) %>% st_centroid(),
+    aes(geometry = geometry, label = label),
+    stat = "sf_coordinates",
+    size = 2.5
+  ) +
+  scale_fill_viridis_c(option = "plasma", direction = -1) +
+  labs(
+    title = "Upazila-Level Poverty in Rajshahi Division",
+    fill = "Poverty Rate (%)"
+  ) +
+  theme_minimal()
+
+
+
+```
+
+
+let's now focus on the top 5 poorest upazilas:
+
+
+```{r}
+
+top5_poor <- rajshahi_map %>%
+  arrange(desc(poverty)) %>%
+  slice(1:5)
+
+
+
+# Now, plotting again:
+library(ggrepel)
+
+ggplot(rajshahi_map) +
+  geom_sf(aes(fill = poverty), color = "white", size = 0.1) +
+  geom_sf(data = top5_poor, fill = NA, color = "red", size = 1.2) +
+  geom_text_repel(
+    data = st_centroid(top5_poor),
+    aes(label = ADM3_EN, geometry = geometry),
+    stat = "sf_coordinates",
+    size = 3,
+    color = "black"
+  ) +
+  scale_fill_viridis_c(option = "plasma", direction = -1, name = "Poverty Rate (%)") +
+  labs(title = "Poorest Upazilas in Rajshahi (Labeled)") +
+  theme_minimal()
+
+
+ggsave("poorest_upazilas_rajshahi_labeled.png", width = 8, height = 5, dpi = 300)
+
+
+
+```
+Here, poorest Upazilas (outlined & labeled):
+The top 5 poorest upazilas (like Godagari, Belkuchi, Chauhali, Bera, and Shahjadpur) are highlighted with bold red borders and labeled
+
+Regional Insights:
+The southeastern upazilas (like Belkuchi, Chauhali, Bera) and some western ones (Godagari) appear to have higher poverty, suggesting possible clustering of deprivation.
+
+
+```{r}
+
+# Visualize the Trends
+# let's see how child dependency changes with avg_price or poverty:
+ggplot(rajshahi_summary, aes(x = avg_price, y = avg_dep, color = urban_rural)) +
+  geom_point(size = 3) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Child Dependency vs. Rice Price",
+       x = "Avg Rice Price (BDT)", y = "Avg Child Dependency")
+
+
+
+
+
+```
+Urban areas (teal) consistently have higher child dependency ratios than rural areas, across all rice price levels.
+
+Rural areas (red) show very little change in child dependency as rice price varies — it’s mostly flat.
+
+The trend lines are nearly horizontal, suggesting that rice price isn't a strong predictor of child dependency in either area type.
+
+
+
+This means, Urban vs. Rural matters more than price in determining child dependency.
+
+The flat lines reflect what your regression models already showed: rice price has a weak or non-significant effect, especially in this small dataset (3 years only).
+
+But that consistent urban-rural gap in dependency is important — likely tied to structural and socioeconomic factors.
+
+```{r}
+
+ggplot(rajshahi_summary, aes(x = avg_price, y = avg_dep, size = avg_no_toilet_pct, color = urban_rural)) +
+  geom_point(alpha = 0.7) +
+  labs(title = "Child Dependency vs Rice Price (Bubble Size = Poverty)",
+       x = "Avg Rice Price", y = "Child Dependency", size = "% No Toilet Access") +
+  theme_minimal()
+
+
+
+
+```
+Urban areas have higher child dependency
+– Across all years, urban bubbles are higher on the y-axis than rural ones.
+
+Poverty and dependency go hand in hand
+– Bigger bubbles (more poverty) tend to have higher child dependency.
+
+Rising rice prices ≠ big change in dependency
+– Rice prices nearly doubled, but child dependency stayed mostly flat.
+
+it means, Even as rice prices changed, it didn’t affect how many children households had. But poverty levels (like lack of toilets) seem to play a bigger role — especially in rural areas. And urban households consistently show higher child dependency, possibly due to deeper social or structural factors.
+
+
+
+
+```{r}
+
+
+
+rajshahi_summary <- ipums_all %>%
+  mutate(child_dependency = NCHILD / FAMSIZE) %>%
+  group_by(YEAR, urban_rural = ifelse(URBAN == 1, "Urban", "Rural")) %>%
+  summarise(
+    avg_famsize = mean(FAMSIZE, na.rm = TRUE),
+    avg_nchild = mean(NCHILD, na.rm = TRUE),
+    avg_child_dependency = mean(child_dependency, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+
+
+
+```
+
+Plot Predictions vs Actuals
+This plot helps show how well the model fits and compares actual vs predicted values:
+
+```{r}
+
+library(ggplot2)
+
+ggplot(rajshahi_summary, aes(x = YEAR, color = urban_rural)) +
+  geom_line(aes(y = avg_famsize), size = 1) +
+  geom_point(aes(y = avg_famsize), size = 2) +
+  labs(
+    title = "Average Family Size in Rajshahi (1991–2011)",
+    x = "Year", y = "Avg Family Size",
+    color = "Area Type"
+  ) +
+  theme_minimal()
+
+
+
+
+ggsave("avg_family_size.png", width = 7, height = 5, dpi = 300)
+
+
+```
+Interpretation: Average Family Size (1991–2011)
+Urban families had consistently larger family sizes than rural ones.
+
+Both urban and rural family sizes peaked in 2001, then declined by 2011.
+
+This drop suggests a demographic transition — possibly linked to better access to education, economic changes, or family planning services.
+
+
+
+
+Now, Let's see  how child dependency changed alongside family size — did they move together?
+
+```{r}
+
+
+names(rajshahi_summary)
+
+
+ggplot(rajshahi_summary, aes(x = YEAR, color = urban_rural)) +
+  geom_line(aes(y = avg_child_dependency), size = 1.2) +
+  geom_point(aes(y = avg_child_dependency), size = 2.5) +
+  labs(
+    title = "Child Dependency Over Time in Rajshahi",
+    subtitle = "Urban vs Rural Trends (1991–2011)",
+    x = "Year", y = "Avg Child Dependency",
+    color = "Area Type"
+  ) +
+  theme_minimal()
+
+
+ggsave("child_dependency_trend.png", width = 7, height = 5, dpi = 300)
+
+
+
+
+
+```
+Urban Rajshahi consistently has higher child dependency ratios than rural areas.
+
+Both urban and rural areas show a dip in 2001, with a slight rebound by 2011.
+
+The gap between urban and rural child dependency stays visible across the years.
+
+
+
+
+
+
+At this point, I wanted to compare Family Size and Child Dependency:
+This will show whether family size trends align with child dependency.
+
+```{r}
+
+# Comparing Avg Family Size and Child Dependency Over Time
+library(ggplot2)
+library(tidyr)
+
+# Reshape for comparison
+comparison_long <- rajshahi_summary %>%
+  select(YEAR, urban_rural, avg_famsize, avg_child_dependency) %>%
+  pivot_longer(cols = c(avg_famsize, avg_child_dependency),
+               names_to = "metric", values_to = "value")
+
+# Plot
+ggplot(comparison_long, aes(x = YEAR, y = value, color = urban_rural)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2.5) +
+  facet_wrap(~metric, scales = "free_y", labeller = labeller(
+    metric = c(avg_famsize = "Average Family Size", avg_child_dependency = "Child Dependency Ratio")
+  )) +
+  labs(
+    title = "Family Size vs Child Dependency Over Time",
+    subtitle = "Rajshahi Division (Urban vs Rural)",
+    x = "Year", y = "Value", color = "Area Type"
+  ) +
+  theme_minimal()
+
+
+
+```
+
+Interpretation: 
+
+Urban areas consistently have:
+- Higher child dependency than rural.
+- Larger family sizes, especially peaking around 2001.
+
+
+* Rural areas are:
+
+- More stable in both metrics.
+
+- Show a slight dip in family size and dependency over time.
+
+Trend connection: As family size increases, child dependency also rises — especially noticeable in urban settings between 1991–2001. They decline together after that.
+
+
+
+
+Le's model Trends Over Time:
+This model tests whether the trend in child dependency differs by 
+
+```{r}
+model_time <- lm(avg_child_dependency ~ YEAR * urban_rural, data = rajshahi_summary)
+summary(model_time)
+
+
+```
+Urban vs Rural: Urban areas still show higher child dependency, but the difference isn’t statistically strong in this model.
+
+Over Time: No clear time trend in dependency — both areas are relatively flat, even with interaction.
+
+The interaction (YEAR:urban_ruralUrban) is not significant → there's no strong evidence that time affects urban and rural differentl
+
+
+
+
+Thus means, the child dependency gap between urban and rural areas is consistent over time, but doesn’t show much change — at least within the years 1991–2011.
+
+
+
+
+
+
+# To expand the model with contextual variables (like poverty and family size) to better understand what might explain child dependency over time.
+
+
+I am Reducing the number of predictors here because I had Too few observations: I only have 6 rows (3 years × 2 area types).
+
+```{r}
+
+
+rajshahi_summary <- rajshahi_summary %>%
+  left_join(rajshahi_contextual, by = "YEAR")
+
+
+#checking
+names(rajshahi_summary)
+
+
+
+model_simple <- lm(avg_child_dependency ~ avg_famsize + urban_rural, data = rajshahi_summary)
+summary(model_simple)
+
+
+
+
+
+
+```
+Even after adjusting for family size:
+
+Urban areas consistently show higher child dependency.
+
+Family size might be inversely related to dependency.
+
+```{r}
+
+
+rajshahi_summary <- rajshahi_summary %>%
+  select(YEAR, urban_rural, avg_famsize, avg_nchild, avg_child_dependency,
+         avg_price, avg_no_toilet_pct)
+
+
+
+ggplot(rajshahi_summary, aes(x = avg_price, y = avg_child_dependency, color = avg_no_toilet_pct)) +
+  geom_point(size = 4) +
+  geom_smooth(method = "lm", se = FALSE, color = "black", linetype = "dashed") +
+  facet_wrap(~ urban_rural) +
+  scale_color_gradient(low = "#b2df8a", high = "#e31a1c") +
+  labs(
+    title = "Child Dependency vs. Rice Price by Area Type",
+    subtitle = "Colored by % No Toilet Access (Poverty Proxy)",
+    x = "Rice Price (BDT)", y = "Child Dependency Ratio",
+    color = "% No Toilet Access"
+  ) +
+  theme_minimal()
+
+
+
+ggsave("child_dep_vs_rice_price.png", width = 8, height = 5, dpi = 300)
+
+
+
+```
+This plot weaves together economic stress, poverty, and demographic behavior in the Rajshahi division. Here's what it reveals:
+
+Urban households consistently show higher child dependency than rural ones — possibly reflecting different socioeconomic pressures or cultural norms.
+
+Rural areas have lower child dependency overall, and their poverty levels have improved more visibly over time (as seen in greener points at higher rice prices).
+
+
+
+
+
+Interestingly, rice prices don’t show a clear linear effect on child dependency. The dashed regression lines are flat, 
+
+suggesting:
+
+- Families are not adjusting their fertility or household composition in direct response to food prices — at least within the limited time frame of 1991–2011.
+
+
+
+Moreover, This visual underscores the deep link between structural poverty and demographic vulnerability. While rice prices may fluctuate, it's the underlying poverty — captured here through sanitation access — that more powerfully shapes family outcomes in Rajshahi.
+
+
+
+
+
+
+Now, let's see how economic burden (rice price), poverty (toilet access), and family structure (size + child dependency) interact and co-shape demographic vulnerability
+
+```{r}
+
+
+ggplot(rajshahi_summary, 
+       aes(x = avg_price, 
+           y = avg_child_dependency,
+           size = avg_famsize, 
+           color = avg_no_toilet_pct)) +
+  geom_point(alpha = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, color = "black", linetype = "dashed", size = 0.7) +
+  facet_wrap(~ urban_rural) +
+  scale_color_gradient(low = "#a1d99b", high = "#de2d26", name = "% Without Toilet") +
+  scale_size(range = c(3, 9), name = "Avg Family Size") +
+  labs(
+    title = "Child Dependency vs Rice Price",
+    subtitle = "Bubble = Family Size | Color = % Without Toilet | Faceted by Area Type",
+    x = "Avg Rice Price (BDT)",
+    y = "Child Dependency Ratio"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    legend.position = "right"
+  )
+
+
+ggsave("child_dependency_vs_riceprice_famsize_poverty.png", width = 9, height = 6, dpi = 300)
+
+
+```
+This faceted plot illustrates how rice prices, poverty levels (proxied by % of households without toilets), and average family size are associated with child dependency ratios in urban and rural Rajshahi between 1991 and 2011.
+
+
+This plot shows that urban dependency is consistently higher, and while poverty and rice price do shift, their impact on child dependency is more nuanced — especially in rural areas where cultural or structural norms may play a larger role than just economic burden.
+
+
+Moreover, This visualization connects the dots between economic burden (rice price), structural poverty (sanitation access), and demographic outcomes (family size & child dependency). It highlights how economic and living condition improvements are linked to lower dependency, especially in rural areas — while urban trends may reflect deeper structural dynamics beyond immediate economic constraints.
+
+
